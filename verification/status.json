@@ -1,0 +1,13 @@
+{
+  "lesson": "C12",
+  "title": "Interrupts, Cancellation and Cleanup",
+  "path": "lesson-c12\\lesson-c12-app",
+  "port": 3012,
+  "scenarios": 3,
+  "state": "implemented and verified",
+  "liveScope": "text-only commentary about the local result",
+  "typecheck": true,
+  "localTests": true,
+  "browserSmoke": "passed: desktop, mobile, scenario controls, source view",
+  "liveCommentarySmoke": "passed: real text-only session reached end_turn"
+}

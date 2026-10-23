@@ -1,0 +1,76 @@
+// Lesson C12: ordinary sessions only; no open workflow runs or competing writers.
+// This module performs no API requests until stopAndConfirm is called.
+import Anthropic from "@anthropic-ai/sdk";
+import { setTimeout as delay } from "node:timers/promises";
+
+export type CleanupResult = {
+  sessionId: string;
+  remoteStop: "confirmed" | "unconfirmed";
+  lastObservedStatus: string;
+  cleanup: "archived" | "not-needed" | "pending";
+};
+export type CleanupControls = {
+  mayBeActive?: boolean;
+  cleanupMs?: number;
+  // Injectable clock/wait permit authored tests without real time or provider work.
+  now?: () => number;
+  wait?: (ms: number) => Promise<void>;
+};
+
+// Caller first closes host admission and reconciles any pending provider input.
+// Never pass the expired run signal into this independent cleanup phase.
+export async function stopAndConfirm(
+  client: Anthropic, sessionId: string, controls: CleanupControls = {}
+): Promise<CleanupResult> {
+  const cleanupMs = controls.cleanupMs ?? 10_000;
+  if (!Number.isFinite(cleanupMs) || cleanupMs < 1)
+    throw new Error("cleanupMs must be a positive duration");
+  const now = controls.now ?? Date.now;
+  const wait = controls.wait ?? delay;
+  const deadline = now() + cleanupMs;
+  const cleanup = new AbortController();
+  const timer = setTimeout(() => cleanup.abort("Cleanup deadline"), cleanupMs);
+  let lastObservedStatus = "unknown";
+  const requestOptions = () => ({
+    signal: cleanup.signal,
+    timeout: Math.max(1, Math.min(3000, deadline - now())),
+    maxRetries: 0
+  });
+  const result = (remoteStop: CleanupResult["remoteStop"],
+                  archived: CleanupResult["cleanup"]): CleanupResult => ({
+    sessionId, remoteStop, lastObservedStatus, cleanup: archived
+  });
+  try {
+    if ((controls.mayBeActive ?? true) && now() < deadline) {
+      try {
+        await client.beta.sessions.events.send(sessionId, {
+          events: [{ type: "user.interrupt" }]
+        }, requestOptions());
+      } catch { /* Acknowledgement is uncertain; inspect status below. */ }
+    }
+    while (now() < deadline && !cleanup.signal.aborted) {
+      try {
+        const session = await client.beta.sessions.retrieve(
+          sessionId, {}, requestOptions()
+        );
+        lastObservedStatus = session.status;
+        if (session.status === "terminated") return result("confirmed", "not-needed");
+        if (session.status === "idle") {
+          try {
+            await client.beta.sessions.archive(sessionId, {}, requestOptions());
+            return result("confirmed", "archived");
+          } catch {
+            return result("confirmed", "pending");
+          }
+        }
+      } catch {
+        if (cleanup.signal.aborted) break;
+      }
+      const remaining = deadline - now();
+      if (remaining > 0) await wait(Math.min(500, remaining));
+    }
+    return result("unconfirmed", "pending");
+  } finally {
+    clearTimeout(timer);
+  }
+}
