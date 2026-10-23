@@ -42,27 +42,87 @@ CLAUDE_MANAGED_ENVIRONMENT_ID=your_environment_id
 PORT=3012
 ```
 
-## How the application was developed
+## How the app was build
 
-The browser collects inputs; the Node host validates requests; the lesson implementation produces observable evidence. The architecture page walks through the real source with numbered steps, prerequisite configuration, source filenames and code excerpts.
+### 1. Require a settled lifecycle observation
 
-### Lesson implementation
+Only idle or terminated settles the authored status sequence. An interrupt request or rescheduling observation alone leaves remoteStop unconfirmed and cleanup pending.
 
-[src/lesson.ts](https://github.com/luiscoco/Udemy-claude-managed-agents-lesson-c12-app/blob/main/src/lesson.ts)
+Source: [src/lesson.ts](src/lesson.ts#L13) · selected statements
 
 ```typescript
-  async run(input) {
+const statuses = list(input, "statuses").map(String),
+  settled = statuses.find((s) => s === "idle" || s === "terminated");
 
-const statuses=list(input,"statuses").map(String), settled=statuses.find(s=>s==="idle"||s==="terminated");
-if(!settled) return report("unconfirmed","No settled state was observed before the cleanup window ended",{remoteStop:"unconfirmed",cleanup:"pending"},["Close host admission","Send interrupt through a fresh cleanup signal","Poll within the independent deadline"]);
-const cleanup=settled==="terminated"?"not-needed":flag(input,"archiveSucceeds")?"archived":"pending";
-return report(cleanup==="pending"?"paused":"passed","Remote stop and cleanup are distinct outcomes",{remoteStop:"confirmed",lastStatus:settled,cleanup},["Do not reuse an aborted run signal","Rescheduling is not settled","Archive only after confirming idle"]);
-
-  }
-};
+if (!settled)
+  return report(
+    "unconfirmed",
+    "No settled state was observed before the cleanup window ended",
+    { remoteStop: "unconfirmed", cleanup: "pending" },
+    [
+      "Close host admission",
+      "Send interrupt through a fresh cleanup signal",
+      "Poll within the independent deadline",
+    ],
+  );
 ```
 
-Read the architecture page for the remaining source excerpts and explanations, including input handling and optional provider behavior. The diagram describes this application, rather than implying that an external integration has been implemented.
+### 2. Decide cleanup after confirming a stop
+
+Termination needs no archive in this model. An idle session can still have pending cleanup when archiving fails, so stopping and cleaning up are separate outcomes.
+
+Source: [src/lesson.ts](src/lesson.ts#L15)
+
+```typescript
+const cleanup =
+  settled === "terminated"
+    ? "not-needed"
+    : flag(input, "archiveSucceeds")
+      ? "archived"
+      : "pending";
+```
+
+### 3. Report partial cleanup honestly
+
+The result preserves the settled status and cleanup state. Its trace describes the independent cleanup signal a real adapter would need; this reducer does not send an interrupt or archive request.
+
+Source: [src/lesson.ts](src/lesson.ts#L16)
+
+```typescript
+return report(
+  cleanup === "pending" ? "paused" : "passed",
+  "Remote stop and cleanup are distinct outcomes",
+  { remoteStop: "confirmed", lastStatus: settled, cleanup },
+  [
+    "Do not reuse an aborted run signal",
+    "Rescheduling is not settled",
+    "Archive only after confirming idle",
+  ],
+);
+```
+
+### Check your understanding
+
+Run **Confirm and archive** in the application. Compare the result with these scenario expectations:
+
+```json
+{
+  "input": {
+    "statuses": [
+      "running",
+      "rescheduling",
+      "idle"
+    ],
+    "archiveSucceeds": true
+  },
+  "expectedOutcome": "passed",
+  "checkEvidence": {
+    "remoteStop": "confirmed"
+  }
+}
+```
+
+Then try **Preserve stop uncertainty**. Its expected outcome is `unconfirmed`; identify the condition or evidence field that explains the difference.
 
 ## Validation
 
